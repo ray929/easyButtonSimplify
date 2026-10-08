@@ -14,3 +14,8 @@
 - 宏文字：调整字号并加厚描边，位置保持不变。
 - Strip the decorations and borders from the extra action button (zone abilities).
 - 清理额外技能按钮（区域技能）的装饰材质与边框。
+
+## Credits / 致谢
+
+Thanks to all addon developers for their work and inspiration.
+感谢所有插件开发者的付出与启发。
