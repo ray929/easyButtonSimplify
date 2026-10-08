@@ -1,8 +1,10 @@
 ## Interface: 120005, 120007, 120100, 16001
 ## Title: Easy Button Simplify
 ## Title-zhCN: 原生动作条简化
+## Title-zhTW: 原生動作條簡化
 ## Notes: Hides native action bar borders, enlarges icons, adds a 1px outline, restyles button text, and strips extra action button decorations.
 ## Notes-zhCN: 隐藏原生动作条边框、放大图标并加 1 像素描边，调整按钮文字样式，清理额外技能按钮的装饰材质。
+## Notes-zhTW: 隱藏原生動作條邊框、放大圖示並加上 1 像素描邊，調整按鈕文字樣式，清理額外技能按鈕的裝飾材質。
 ## Author: ray929
 ## Version: @project-version@
 ## DefaultState: enabled
