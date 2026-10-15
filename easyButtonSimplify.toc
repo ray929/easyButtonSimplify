@@ -1,4 +1,4 @@
-## Interface: 120100, 16001
+## Interface: 120100, 120105, 16001
 ## Title: Easy Button Simplify
 ## Notes: Hides native action bar borders, enlarges icons, adds a 1px outline, restyles button text, and strips extra action button decorations.
 ## Notes-zhCN: 隐藏原生动作条边框、放大图标并加 1 像素描边，调整按钮文字样式，清理额外技能按钮的装饰材质。
