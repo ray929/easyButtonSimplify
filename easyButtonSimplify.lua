@@ -118,14 +118,27 @@ local function AddBlackBorder(button)
     end
 end
 
-local function AdjustButtonOverlays(button)
-    if button.cooldown then button.cooldown:SetAllPoints(button) end
+-- 覆盖层纹理重映射（幂等，只动纹理、不动布局，战斗中调用安全）。
+-- ⚠️ 必须能重复执行：暴雪 BaseActionButtonMixin:UpdateButtonArt()（ActionButtonOverrides.lua）
+--    会按 hideBarArt 分支无条件 SetNormalAtlas / SetPushedAtlas，把这里的 SetTexture 换成
+--    暴雪图集。而 SetAtlas **不重置已有的 texcoord** → 形成「暴雪图集 + 本插件图集坐标」，
+--    按下层会去采暴雪 UI 图集里一块无关区域再拉伸铺满按钮，观感就是覆盖层扭曲
+--    （2026-11-11 用户实测：登录后按住快捷键扭曲、reload 后正常；dump 证据为
+--     atlas="UI-HUD-ActionBar-IconFrame-AddRow-Down" + texcoord 仍是本插件值）。
+--    因此本函数被 UpdateButtonArt 的 hook 与按钮 OnShow 各调一次。
+local function RemapOverlays(button)
+    if not button then return end
     RemapTexture(button.HighlightTexture)
     RemapTexture(button.CheckedTexture)
     RemapTexture(button.SpellHighlightTexture)
     RemapTexture(button.NewActionTexture)
     RemapTexture(button.PushedTexture)
     RemapTexture(button.Border)
+end
+
+local function AdjustButtonOverlays(button)
+    if button.cooldown then button.cooldown:SetAllPoints(button) end
+    RemapOverlays(button)
     if button.SlotBackground then button.SlotBackground:SetDrawLayer("BACKGROUND", -1) end
     if button.SpellCastAnimFrame then
         button.SpellCastAnimFrame:SetScript("OnShow", function(self) self:Hide() end)
@@ -150,6 +163,8 @@ local function SetupBorders()
                     HideBorder(button)
                     EnlargeIcon(button)
                     AddBlackBorder(button)
+                    -- 暴雪可能在按钮显示前重设过图集（UpdateButtonArt），这里补一次
+                    RemapOverlays(button)
                 end)
                 AdjustButtonOverlays(button)
                 if button.NormalTexture then
@@ -292,6 +307,16 @@ local function EnsureHooks()
     end
     if type(_G.ActionButton_Update) == "function" then
         hooksecurefunc("ActionButton_Update", ApplyMacro)
+    end
+    -- 覆盖层图集：BaseActionButtonMixin:UpdateButtonArt 会按 hideBarArt 分支无条件
+    -- SetNormalAtlas / SetPushedAtlas，把本插件的 SetTexture 换回暴雪图集；而 SetAtlas 不重置
+    -- 已有 texcoord（2026-11-11 dump 实证），于是按下层用本插件图集坐标去采暴雪 UI 图集，
+    -- 表现为按住快捷键时覆盖层扭曲、reload 后正常。hook 在其后立刻重施（只动纹理，战斗安全）。
+    if BaseActionButtonMixin and BaseActionButtonMixin.UpdateButtonArt then
+        hooksecurefunc(BaseActionButtonMixin, "UpdateButtonArt", RemapOverlays)
+    end
+    if type(_G.ActionButton_UpdateButtonArt) == "function" then
+        hooksecurefunc("ActionButton_UpdateButtonArt", RemapOverlays)
     end
     hooked = true
 end
