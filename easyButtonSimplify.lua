@@ -357,31 +357,141 @@ local function ApplyExtraAction()
 end
 
 -- =========================================================
+-- D. 第三方「动作条类」按钮的边框清理（通用识别，2026-11-12）
+--    背景：TotemTimers 的计时器按钮（XiTimers_Timer1..N）用 `inherits="ActionButtonTemplate"`
+--    建出来的 CheckButton，结构上带 .icon / .NormalTexture / IconMask，所以跟原生按钮一样
+--    会画出动作条那圈灰边框。这类插件不止一个，故按**结构签名**识别，不写死名字。
+--
+--    识别：Button/CheckButton 且同时有 .icon 与 .NormalTexture（这是 ActionButtonTemplate 的特征）。
+--    跳过：原生动作条按钮（A 段已经处理过，且它们要走 EnlargeIcon，不能在同一处混着做）。
+--
+--    ⚠️ 对第三方按钮只做两件事：隐藏 NormalTexture（顺带 Border）+ 加 1 像素黑色描边。
+--       **绝不调用 EnlargeIcon**：这类按钮常把按钮切成两个半宽图标（TotemTimers 就是
+--       18+18 两个半图 + 一条状态条），把 icon 拉满会盖掉另一半、毁掉原布局。
+--
+--    ⚠️ 必须脱战处理：目标可能继承 SecureActionButtonTemplate（保护帧）。
+--       战斗内扫到就跳过，等下个 tick（2 秒）。
+--
+--    ⚠️ 光隐藏一次不够：`BaseActionButtonMixin:UpdateButtonArt` 会用 SetNormalAtlas 把边框
+--       图集重新设回来（TotemTimers 自己在初始化时也调过 HideNormalTexture，边框照样回来）。
+--       所以除 OnShow 重施外，还挂 UpdateButtonArt 的 hook 兜底。
+-- =========================================================
+
+local GENERIC_TARGET = setmetatable({}, { __mode = "k" })   -- 已处理（弱键：按钮销毁后自动释放）
+
+-- 原生动作条按钮按名字前缀排除（按钮可能晚于本插件创建，所以按前缀判、不按对象快照）
+local function IsStandardName(name)
+    if not name then return false end
+    for _, bar in ipairs(STANDARD_BARS) do
+        if name:sub(1, #bar) == bar then return true end
+    end
+    return false
+end
+
+local function IsActionButtonLike(f)
+    if not f or GENERIC_TARGET[f] then return false end
+    local okT, otype = pcall(f.GetObjectType, f)
+    if not okT or (otype ~= "Button" and otype ~= "CheckButton") then return false end
+    if not (f.icon and f.NormalTexture) then return false end
+    local name
+    if f.GetName then name = f:GetName() end
+    if IsStandardName(name) then return false end
+    return true
+end
+
+local function ApplyGeneric(button)
+    if not button or GENERIC_TARGET[button] then return end
+    GENERIC_TARGET[button] = true
+    HideBorder(button)                                  -- 隐藏 NormalTexture + 去 IconMask
+    if button.Border then button.Border:Hide() end
+    AddBlackBorder(button)                              -- 1px 黑色描边（幂等）
+    if button.NormalTexture then
+        button.NormalTexture:HookScript("OnShow", HideSelf)
+    end
+    button:HookScript("OnShow", function()
+        HideBorder(button)
+        if button.Border then button.Border:Hide() end
+        AddBlackBorder(button)
+    end)
+end
+
+-- 扫描 UIParent 的顶层帧与其直接子帧（第三方按钮基本都是 UIParent 的直接子级）。
+-- 不用全树递归：每秒级 ticker 下会明显浪费；两级已覆盖 TotemTimers 这类布局。
+local function ScanGeneric()
+    if InCombatLockdown() then return end   -- 保护帧：战斗内一律跳过
+    local ok, tops = pcall(function() return { UIParent:GetChildren() } end)
+    if not ok or not tops then return end
+    for _, top in ipairs(tops) do
+        if IsActionButtonLike(top) then ApplyGeneric(top) end
+        local okC, kids = pcall(function() return { top:GetChildren() } end)
+        if okC and kids then
+            for _, kid in ipairs(kids) do
+                if IsActionButtonLike(kid) then ApplyGeneric(kid) end
+            end
+        end
+    end
+end
+
+-- UpdateButtonArt 会把 NormalTexture 重新设回图集 → 对已处理的目标补一刀
+local function RehideGeneric(button)
+    if button and GENERIC_TARGET[button] then
+        HideBorder(button)
+        if button.Border then button.Border:Hide() end
+    end
+end
+
+local genericHooked = false
+local function EnsureGenericHook()
+    if genericHooked then return end
+    genericHooked = true
+    if BaseActionButtonMixin and BaseActionButtonMixin.UpdateButtonArt then
+        hooksecurefunc(BaseActionButtonMixin, "UpdateButtonArt", RehideGeneric)
+    end
+    if type(_G.ActionButton_UpdateButtonArt) == "function" then
+        hooksecurefunc("ActionButton_UpdateButtonArt", RehideGeneric)
+    end
+end
+
+-- =========================================================
 -- 事件驱动（统一一个事件帧）
 --   PLAYER_LOGIN          → 挂 hook + 延迟多次套用文字 + 启动额外按钮装饰 ticker
 --   PLAYER_ENTERING_WORLD → 边框/图标处理（此时按钮已全部存在）+ 延迟套用文字
 --   其余（翻页 / 改键）    → 重新套用文字
 -- =========================================================
 local extraTicker = nil
+local genericTicker = nil
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 ev:RegisterEvent("UPDATE_BINDINGS")
+ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:SetScript("OnEvent", function(_, e)
     if e == "PLAYER_LOGIN" then
         EnsureHooks()
+        EnsureGenericHook()
         C_Timer.After(0.2, ApplyAll)
         C_Timer.After(1.0, ApplyAll)
         C_Timer.After(3.0, ApplyAll)
         ApplyExtraAction()
+        ScanGeneric()
+        C_Timer.After(0.5, ScanGeneric)
+        C_Timer.After(2.0, ScanGeneric)
         if not extraTicker then
             extraTicker = C_Timer.NewTicker(0.5, ApplyExtraAction)
         end
+        -- 第三方按钮按需创建（TotemTimers 扔一个图腾才建一个计时器按钮）→ 低频补扫
+        if not genericTicker then
+            genericTicker = C_Timer.NewTicker(2, ScanGeneric)
+        end
     elseif e == "PLAYER_ENTERING_WORLD" then
         SetupBorders()
+        EnsureGenericHook()
+        ScanGeneric()
         C_Timer.After(0.2, ApplyAll)
         C_Timer.After(1.0, ApplyAll)
+    elseif e == "PLAYER_REGEN_ENABLED" then
+        ScanGeneric()   -- 战斗内跳过的第三方按钮，脱战后补处理
     else
         ApplyAll()
     end

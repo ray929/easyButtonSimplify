@@ -8,6 +8,7 @@
 - Keybind and stack count text: smaller, thicker outline, moved to the bottom-right / top-right corner of the button.
 - Macro text: resized with a thicker outline, position left unchanged.
 - Strip the decorations and borders from the extra action button (zone abilities).
+- Third-party buttons built on Blizzard's action button template (e.g. TotemTimers timer buttons) get the same treatment: border gone, thin black outline kept. Their icon layout is left untouched.
 
 ## 简体中文
 
@@ -17,6 +18,7 @@
 - 按键与层数文字：更小、加厚描边，并移动到按钮右下角 / 右上角。
 - 宏文字：调整字号并加厚描边，位置保持不变。
 - 清理额外技能按钮（区域技能）的装饰材质与边框。
+- 第三方插件用暴雪动作条按钮模板做出来的按钮（如 TotemTimers 的计时器按钮）同样处理：去掉边框、保留 1 像素黑边，图标布局不动。
 
 ## 繁體中文
 
@@ -26,6 +28,7 @@
 - 按鍵與堆疊數量文字：字級變小、描邊加厚，並移到按鈕右下角 / 右上角。
 - 巨集文字：調整字級並加厚描邊，位置維持不變。
 - 清除額外技能按鈕（區域技能）的裝飾材質與邊框。
+- 第三方插件用暴雪快捷列按鈕範本做成的按鈕（如 TotemTimers 的計時器按鈕）同樣處理：去掉邊框、保留 1 像素黑邊，圖示版面不動。
 
 ## Credits / 致谢 / 致謝
 
