@@ -399,11 +399,25 @@ local function IsActionButtonLike(f)
     return true
 end
 
+-- 判断图标是否「本来就铺满按钮」（模板默认布局）。
+-- 只有这种才敢放大裁切：第三方插件可能把按钮切成两个半宽图标、或把 icon 缩到一角，
+-- 那种布局放大后会盖掉别的元素。实测 TotemTimers 的 icon 就是 36×36 铺满按钮。
+local function IconFillsButton(button)
+    local icon = button.icon
+    if not icon then return false end
+    local bw, bh = button:GetWidth(), button:GetHeight()
+    local iw, ih = icon:GetWidth(), icon:GetHeight()
+    if not (bw and bh and iw and ih and bw > 0 and bh > 0) then return false end
+    return math.abs(iw - bw) < 1 and math.abs(ih - bh) < 1
+end
+
 local function ApplyGeneric(button)
     if not button or GENERIC_TARGET[button] then return end
     GENERIC_TARGET[button] = true
     HideBorder(button)                                  -- 隐藏 NormalTexture + 去 IconMask
     if button.Border then button.Border:Hide() end
+    -- 素材自带的那圈黑边只能靠「放大 + 裁切」去掉；布局不是默认满铺的就跳过
+    if IconFillsButton(button) then EnlargeIcon(button) end
     AddBlackBorder(button)                              -- 1px 黑色描边（幂等）
     if button.NormalTexture then
         button.NormalTexture:HookScript("OnShow", HideSelf)
@@ -411,6 +425,7 @@ local function ApplyGeneric(button)
     button:HookScript("OnShow", function()
         HideBorder(button)
         if button.Border then button.Border:Hide() end
+        if IconFillsButton(button) then EnlargeIcon(button) end
         AddBlackBorder(button)
     end)
 end
@@ -437,6 +452,8 @@ local function RehideGeneric(button)
     if button and GENERIC_TARGET[button] then
         HideBorder(button)
         if button.Border then button.Border:Hide() end
+        -- UpdateButtonArt 也可能把图标的 texcoord 重置回全图 → 放大裁切要重施
+        if IconFillsButton(button) then EnlargeIcon(button) end
     end
 end
 
