@@ -388,8 +388,8 @@ local function IsStandardName(name)
     return false
 end
 
-local function IsActionButtonLike(f)
-    if not f or GENERIC_TARGET[f] then return false end
+local function IsGenericCandidate(f)
+    if not f then return false end
     local okT, otype = pcall(f.GetObjectType, f)
     if not okT or (otype ~= "Button" and otype ~= "CheckButton") then return false end
     if not (f.icon and f.NormalTexture) then return false end
@@ -411,49 +411,100 @@ local function IconFillsButton(button)
     return math.abs(iw - bw) < 1 and math.abs(ih - bh) < 1
 end
 
+-- 图标上现在是否真的挂着 IconMask（只看 button.IconMask 是否存在没用：它一直在，
+-- 关键是它有没有被 AddMaskTexture 套到 icon 上；暴雪之后可能重新套上）
+local function IconHasMask(button)
+    local icon = button.icon
+    if not (icon and button.IconMask and icon.GetMaskTexture) then return false end
+    local ok, cur = pcall(icon.GetMaskTexture, icon)
+    return ok and cur == button.IconMask
+end
+
+-- 图标是否还没做「放大裁切」（texcoord 仍是全图）。每轮补做时用来避免重复 SetTexCoord。
+local function IconNeedsEnlarge(button)
+    local icon = button.icon
+    if not (icon and icon.GetTexCoord and IconFillsButton(button)) then return false end
+    local inset = (1 - 1 / ICON_SCALE) / 2
+    local ok, l = pcall(icon.GetTexCoord, icon)
+    if not ok or type(l) ~= "number" then return false end
+    return math.abs(l - inset) > 0.001
+end
+
+-- 幂等：把「去框 + 放大裁切 + 黑边」重施一遍。
+-- ⚠️ 必须能反复跑：按钮可能在首次处理之后才完成布局（那时宽高还是 0，EnlargeIcon 会直接
+--    返回），也可能被暴雪重新套上 IconMask / 重设图集。用户实测「就那一个图标有边框、别的没有」
+--    就是首次处理时 GetWidth() 还是 0、之后没人补。
+local function EnsureGeneric(button)
+    if not button then return end
+    if button.NormalTexture and button.NormalTexture:IsShown() then
+        button.NormalTexture:Hide()
+    end
+    if IconHasMask(button) then HideBorder(button) end
+    if button.Border and button.Border:IsShown() then button.Border:Hide() end
+    if IconNeedsEnlarge(button) then EnlargeIcon(button) end
+    AddBlackBorder(button)
+end
+
 local function ApplyGeneric(button)
     if not button or GENERIC_TARGET[button] then return end
     GENERIC_TARGET[button] = true
-    HideBorder(button)                                  -- 隐藏 NormalTexture + 去 IconMask
-    if button.Border then button.Border:Hide() end
-    -- 素材自带的那圈黑边只能靠「放大 + 裁切」去掉；布局不是默认满铺的就跳过
-    if IconFillsButton(button) then EnlargeIcon(button) end
-    AddBlackBorder(button)                              -- 1px 黑色描边（幂等）
+    EnsureGeneric(button)
     if button.NormalTexture then
         button.NormalTexture:HookScript("OnShow", HideSelf)
     end
-    button:HookScript("OnShow", function()
-        HideBorder(button)
-        if button.Border then button.Border:Hide() end
-        if IconFillsButton(button) then EnlargeIcon(button) end
-        AddBlackBorder(button)
-    end)
+    button:HookScript("OnShow", EnsureGeneric)
 end
 
--- 扫描 UIParent 的顶层帧与其直接子帧（第三方按钮基本都是 UIParent 的直接子级）。
--- 不用全树递归：每秒级 ticker 下会明显浪费；两级已覆盖 TotemTimers 这类布局。
-local function ScanGeneric()
-    if InCombatLockdown() then return end   -- 保护帧：战斗内一律跳过
-    local ok, tops = pcall(function() return { UIParent:GetChildren() } end)
-    if not ok or not tops then return end
-    for _, top in ipairs(tops) do
-        if IsActionButtonLike(top) then ApplyGeneric(top) end
-        local okC, kids = pcall(function() return { top:GetChildren() } end)
-        if okC and kids then
-            for _, kid in ipairs(kids) do
-                if IsActionButtonLike(kid) then ApplyGeneric(kid) end
+-- 原生动作条按钮同样要每轮补：SetupBorders 只在进世界时跑一次，
+-- 那时按钮可能还没显示、宽高为 0（EnlargeIcon 直接返回且不会重试）→ 素材自带黑边露出来。
+-- 范围与 SetupBorders 的 BARS 完全一致，避免顺手改到宠物/载具以外的按钮。
+local function EnsureStandard()
+    for _, bar in ipairs(BARS) do
+        for i = 1, ButtonCount(bar) do
+            local button = _G[bar .. "Button" .. i]
+            if button then
+                if IconHasMask(button) then HideBorder(button) end
+                if IconNeedsEnlarge(button) then EnlargeIcon(button) end
+                AddBlackBorder(button)
             end
         end
     end
 end
 
--- UpdateButtonArt 会把 NormalTexture 重新设回图集 → 对已处理的目标补一刀
+-- 扫描 UIParent 的顶层帧与其直接子帧（第三方按钮基本都是 UIParent 的直接子级）。
+-- 不用全树递归：两秒一次 ticker 下会明显浪费；两级已覆盖 TotemTimers 这类布局。
+-- 已登记的目标每轮也过一遍 EnsureGeneric（首次处理时布局可能还没就绪）。
+local function ScanGeneric()
+    if InCombatLockdown() then return end   -- 保护帧：战斗内一律跳过
+    local ok, tops = pcall(function() return { UIParent:GetChildren() } end)
+    if not ok or not tops then return end
+    local function consider(f)
+        if not f then return end
+        if GENERIC_TARGET[f] then
+            EnsureGeneric(f)
+        elseif IsGenericCandidate(f) then
+            ApplyGeneric(f)
+        end
+    end
+    for _, top in ipairs(tops) do
+        consider(top)
+        local okC, kids = pcall(function() return { top:GetChildren() } end)
+        if okC and kids then
+            for _, kid in ipairs(kids) do consider(kid) end
+        end
+    end
+end
+
+-- 每轮保证：原生按钮 + 第三方按钮都已处理（两者都幂等、只做有必要的操作）
+local function EnsureTick()
+    EnsureStandard()
+    ScanGeneric()
+end
+
+-- UpdateButtonArt 会把 NormalTexture 图集 / 图标 texcoord 重新设回来 → 对已处理的目标补一刀
 local function RehideGeneric(button)
     if button and GENERIC_TARGET[button] then
-        HideBorder(button)
-        if button.Border then button.Border:Hide() end
-        -- UpdateButtonArt 也可能把图标的 texcoord 重置回全图 → 放大裁切要重施
-        if IconFillsButton(button) then EnlargeIcon(button) end
+        EnsureGeneric(button)
     end
 end
 
@@ -491,24 +542,25 @@ ev:SetScript("OnEvent", function(_, e)
         C_Timer.After(1.0, ApplyAll)
         C_Timer.After(3.0, ApplyAll)
         ApplyExtraAction()
-        ScanGeneric()
-        C_Timer.After(0.5, ScanGeneric)
-        C_Timer.After(2.0, ScanGeneric)
+        EnsureTick()
+        C_Timer.After(0.5, EnsureTick)
+        C_Timer.After(2.0, EnsureTick)
         if not extraTicker then
             extraTicker = C_Timer.NewTicker(0.5, ApplyExtraAction)
         end
-        -- 第三方按钮按需创建（TotemTimers 扔一个图腾才建一个计时器按钮）→ 低频补扫
+        -- 第三方按钮按需创建（TotemTimers 扔一个图腾才建一个计时器按钮）+ 原生按钮可能
+        -- 在进世界时还没宽高 → 低频整体补做（原生 + 第三方，两者都幂等）
         if not genericTicker then
-            genericTicker = C_Timer.NewTicker(2, ScanGeneric)
+            genericTicker = C_Timer.NewTicker(2, EnsureTick)
         end
     elseif e == "PLAYER_ENTERING_WORLD" then
         SetupBorders()
         EnsureGenericHook()
-        ScanGeneric()
+        EnsureTick()
         C_Timer.After(0.2, ApplyAll)
         C_Timer.After(1.0, ApplyAll)
     elseif e == "PLAYER_REGEN_ENABLED" then
-        ScanGeneric()   -- 战斗内跳过的第三方按钮，脱战后补处理
+        EnsureTick()   -- 战斗内跳过的第三方按钮 / 原生按钮，脱战后补处理
     else
         ApplyAll()
     end
