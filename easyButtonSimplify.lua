@@ -161,10 +161,13 @@ local function SetupBorders()
                 AddBlackBorder(button)
                 button:HookScript("OnShow", function()
                     HideBorder(button)
-                    EnlargeIcon(button)
-                    AddBlackBorder(button)
                     -- 暴雪可能在按钮显示前重设过图集（UpdateButtonArt），这里补一次
                     RemapOverlays(button)
+                    -- ⚠️ 布局类操作（放大图标 / 加黑边）战斗内不做：按钮是保护帧，
+                    --    战斗内改它会让安全路径上的数值变成 secret。脱战后 EnsureTick 会补。
+                    if InCombatLockdown() then return end
+                    EnlargeIcon(button)
+                    AddBlackBorder(button)
                 end)
                 AdjustButtonOverlays(button)
                 if button.NormalTexture then
@@ -436,11 +439,16 @@ end
 --    就是首次处理时 GetWidth() 还是 0、之后没人补。
 local function EnsureGeneric(button)
     if not button then return end
+    -- 战斗中只做「隐藏」这一类只读操作；Layout/创建纹理/改 texcoord 一律推迟到脱战。
+    -- ⚠️ 这些按钮可能继承 SecureActionButtonTemplate，战斗中改它们的布局会污染安全代码路径，
+    --    12.x 下表现为暴雪那边的数值突然变成 secret（TotemTimers 因此抛
+    --    「cannot be indexed with secret keys」，用户实测战斗中换图腾必现）。
     if button.NormalTexture and button.NormalTexture:IsShown() then
         button.NormalTexture:Hide()
     end
-    if IconHasMask(button) then HideBorder(button) end
     if button.Border and button.Border:IsShown() then button.Border:Hide() end
+    if InCombatLockdown() then return end
+    if IconHasMask(button) then HideBorder(button) end    -- 摘 IconMask 也算改布局，脱战才做
     if IconNeedsEnlarge(button) then EnlargeIcon(button) end
     AddBlackBorder(button)
 end
@@ -459,6 +467,10 @@ end
 -- 那时按钮可能还没显示、宽高为 0（EnlargeIcon 直接返回且不会重试）→ 素材自带黑边露出来。
 -- 范围与 SetupBorders 的 BARS 完全一致，避免顺手改到宠物/载具以外的按钮。
 local function EnsureStandard()
+    -- ⚠️ 战斗中一律不碰：动作条按钮是保护帧，战斗内改 texcoord / 建纹理会污染安全路径，
+    --    可能让暴雪返回的数值变成 secret（TotemTimers 的 flash 报错就是这么被触发的）。
+    --    脱战时由 PLAYER_REGEN_ENABLED 与 2 秒 ticker 补上。
+    if InCombatLockdown() then return end
     for _, bar in ipairs(BARS) do
         for i = 1, ButtonCount(bar) do
             local button = _G[bar .. "Button" .. i]
@@ -495,8 +507,10 @@ local function ScanGeneric()
     end
 end
 
--- 每轮保证：原生按钮 + 第三方按钮都已处理（两者都幂等、只做有必要的操作）
+-- 每轮保证：原生按钮 + 第三方按钮都已处理（两者都幂等、只做有必要的操作）。
+-- 战斗内整体跳过：这些按钮可能是保护帧，战斗内改布局有污染风险（见 EnsureStandard 注释）。
 local function EnsureTick()
+    if InCombatLockdown() then return end
     EnsureStandard()
     ScanGeneric()
 end
