@@ -64,6 +64,8 @@ local function RemapTexture(texture)
     if atlas == nil then return end  -- 该纹理不是动作条图集区域则不动
     local width = texture:GetWidth()
     local height = texture:GetHeight()
+    -- 按钮尚未布局时宽高为 0：此时 SetWidth(0) 会把纹理永久压成 0，下次取宽还是 0 → 死循环。
+    if not width or width <= 0 or not height or height <= 0 then return end
     texture:SetTexture(replacementTexture)
     texture:SetTexCoord(atlas[3], atlas[4], atlas[5], atlas[6])
     texture:SetWidth(width)
@@ -170,6 +172,16 @@ local function SetupBorders()
                     AddBlackBorder(button)
                 end)
                 AdjustButtonOverlays(button)
+                -- ⚠️ 必须 hook【按钮实例】而不是 BaseActionButtonMixin 表：XML 的 mixin 是逐键
+                --    拷贝进按钮的（按钮调用的是 self:UpdateButtonArt()），改 mixin 表只换掉表里
+                --    那个字段，实例仍持有旧函数引用 → 挂在表上的 hook 永不触发。同理，本文件
+                --    其余挂在 ActionBarActionButtonMixin 上的 hook 也可能因此失效。
+                if not button._EBSArtHooked then
+                    button._EBSArtHooked = true
+                    if button.UpdateButtonArt then
+                        hooksecurefunc(button, "UpdateButtonArt", RemapOverlays)
+                    end
+                end
                 if button.NormalTexture then
                     button.NormalTexture:HookScript("OnShow", HideSelf)
                 end
@@ -478,6 +490,15 @@ local function EnsureStandard()
                 if IconHasMask(button) then HideBorder(button) end
                 if IconNeedsEnlarge(button) then EnlargeIcon(button) end
                 AddBlackBorder(button)
+                -- 覆盖层纹理自愈：暴雪 BaseActionButtonMixin:UpdateButtonArt 会把 Pushed 等
+                -- 换回自己的图集且不重置 texcoord。挂 mixin 上的 hook 对**实例拷贝的方法**
+                -- 无效（XML mixin 是逐键拷进按钮的，见 ActionButton.lua:1551 的 self: 调用），
+                -- 所以只能按「atlas 是否还在」这个可观测状态做幂等自愈。
+                -- GetAtlas 非 nil = 已被换回；重映射后 atlas 变 nil，因此天然幂等。
+                if button.PushedTexture and button.PushedTexture.GetAtlas
+                    and button.PushedTexture:GetAtlas() then
+                    RemapOverlays(button)
+                end
             end
         end
     end
