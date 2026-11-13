@@ -152,6 +152,10 @@ end
 
 local function HideSelf(self) self:Hide() end
 
+-- 前向声明：函数体定义在 B 段（ApplyAll 之后），SetupBorders 只在进世界时执行，
+-- 那时已赋值；提前声明是为了让 SetupBorders 里能用 upvalue 而不是误判成全局。
+local HookButtonText
+
 local function SetupBorders()
     for _, bar in ipairs(BARS) do
         for i = 1, ButtonCount(bar) do
@@ -161,6 +165,7 @@ local function SetupBorders()
                 HideBorder(button)
                 EnlargeIcon(button)
                 AddBlackBorder(button)
+                if HookButtonText then HookButtonText(button) end
                 button:HookScript("OnShow", function()
                     HideBorder(button)
                     -- 暴雪可能在按钮显示前重设过图集（UpdateButtonArt），这里补一次
@@ -294,11 +299,37 @@ local function ApplyAll()
     end
 end
 
+-- 逐个按钮挂文字刷新 hook（幂等）。
+-- ⚠️ 必须 hook【按钮实例】：XML 的 mixin 是逐键拷贝进按钮的，按钮刷新走的是
+--    self:UpdateCount() / self:UpdateHotkeys()，挂在 ActionBarActionButtonMixin 表上的
+--    hooksecurefunc 只换掉表里的字段，实例仍持有旧函数引用 → 回调永不触发
+--    （层数至今留在右下角、没挪到右上角，就是这么来的）。
+-- 全局函数形态（ActionButton_UpdateCount 等）仍由 EnsureHooks 兜一层，两条路互不冲突。
+function HookButtonText(button)
+    if not button or button._EBSTextHooked then return end
+    button._EBSTextHooked = true
+    if type(button.UpdateHotkeys) == "function" then
+        hooksecurefunc(button, "UpdateHotkeys", ApplyHotKey)
+    end
+    if type(button.UpdateCount) == "function" then
+        hooksecurefunc(button, "UpdateCount", ApplyCount)
+    end
+    if type(button.Update) == "function" then
+        hooksecurefunc(button, "Update", ApplyMacro)
+    end
+    -- 首次挂上时立刻套一次，免得新按钮要等下一次原生刷新才生效
+    ApplyHotKey(button)
+    ApplyCount(button)
+    ApplyMacro(button)
+end
+
 -- Hook 持久化：原生刷新后会把 HotKey / Count / 宏文本 重置回默认，
 -- 必须在其后重新套用，样式才不会被冲掉。
 local hooked = false
 local function EnsureHooks()
     if hooked then return end
+    -- 兜底层：全局函数形态确实会被调用，留着；挂在 mixin 表上的这三条对**拷贝了方法的
+    -- 按钮实例**无效（见 HookButtonText 的注释），真正起作用的是逐按钮注册的实例 hook。
     -- HotKey：主刷新入口
     if ActionBarActionButtonMixin and ActionBarActionButtonMixin.UpdateHotkeys then
         hooksecurefunc(ActionBarActionButtonMixin, "UpdateHotkeys", ApplyHotKey)
@@ -490,6 +521,9 @@ local function EnsureStandard()
                 if IconHasMask(button) then HideBorder(button) end
                 if IconNeedsEnlarge(button) then EnlargeIcon(button) end
                 AddBlackBorder(button)
+                -- 按钮可能晚于 SetupBorders 才创建（新角色首次进世界尤其明显），
+                -- 这里补挂文字刷新 hook；已挂过的会立刻返回。
+                if HookButtonText then HookButtonText(button) end
                 -- 覆盖层纹理自愈：暴雪 BaseActionButtonMixin:UpdateButtonArt 会把 Pushed 等
                 -- 换回自己的图集且不重置 texcoord。挂 mixin 上的 hook 对**实例拷贝的方法**
                 -- 无效（XML mixin 是逐键拷进按钮的，见 ActionButton.lua:1551 的 self: 调用），
